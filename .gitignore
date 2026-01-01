@@ -1,0 +1,57 @@
+# Python virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Installer / pip logs
+pip-log.txt
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Streamlit
+.streamlit/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# Environment / secrets
+.env
+.env.*
+config.py
+secrets.json
+credentials.json
+*.pem
+*.key
+
+# Logs
+*.log
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Reports / generated files
+reports/
+*.pdf
+
+# Add any other files/directories you don't want in git here
