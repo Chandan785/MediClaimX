@@ -1,7 +1,0 @@
-Collecting reportlab
-  Downloading reportlab-4.4.7-py3-none-any.whl (2.0 MB)
-     ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.0/2.0 MB 2.5 MB/s eta 0:00:00
-Requirement already satisfied: pillow>=9.0.0 in ./venv/lib/python3.11/site-packages (from reportlab) (12.0.0)
-Requirement already satisfied: charset-normalizer in ./venv/lib/python3.11/site-packages (from reportlab) (3.4.4)
-Installing collected packages: reportlab
-Successfully installed reportlab-4.4.7
