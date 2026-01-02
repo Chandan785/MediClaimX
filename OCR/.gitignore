@@ -1,0 +1,60 @@
+# Virtual environments
+venv/
+.venv/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test & tooling cache
+.pytest_cache/
+
+# Streamlit files
+.streamlit/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs and runtime files
+*.log
+logs/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Distribution / packaging
+pip-wheel-metadata/
+
+# Large or generated data (ignore only large files not required to run)
+# Keep small sample files in data/ if they are useful for examples
+data/*.zip
+data/*.tar
+
+# Local secrets and configuration
+config.py
+.env
+
+# Misc local/generated folders
+.kiro/
+=0.8.0/
+=4.0.0/
+
+# Ignore virtual envs created elsewhere in repo
+OCR/venv/
+
+# Ignore any coverage reports
+htmlcov/
+.coverage
+
+# Ignore system temporary files
+*.tmp
+*.swp
+
+# Ignore node_modules if present
+node_modules/

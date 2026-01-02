@@ -69,8 +69,8 @@ class InputValidator:
                 # Read first few bytes for basic format validation
                 file_bytes = file.read(1024)
                 file.seek(0)  # Reset file pointer
-                
-                if not file_bytes:
+                 
+                if not file_bytes: 
                     return False, f"{file_type.title()} file appears to be empty"
                 
                 # Basic PDF validation - check for PDF header
