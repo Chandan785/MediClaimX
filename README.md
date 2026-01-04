@@ -1,4 +1,5 @@
 # 🏥 Medical Claims Processor (India)
+## 🔗 **Live Demo:** [Medical Claims Processor](https://chandan785-mediclaimx-app-posmeb.streamlit.app/)
 
 An AI-powered Streamlit application that automates medical reimbursement claim verification using Google Gemini API with **intelligent coverage determination**. Optimized for free-tier usage with Indian Rupee (₹) support and comprehensive admin review capabilities.
 
