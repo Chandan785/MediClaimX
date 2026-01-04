@@ -16,7 +16,20 @@ from src.coverage_engine import enhance_claim_with_coverage_analysis
 from src.calculator import ClaimCalculator
 from src.models import ClaimData, CalculationResult
 from src.pdf_generator import PDFReportGenerator
-from config import GOOGLE_API_KEY, ADMIN_PASSWORD
+#this is before the deployment
+#from config import GOOGLE_API_KEY, ADMIN_PASSWORD
+#for the depoyment
+
+import os
+
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+
+if not GOOGLE_API_KEY:
+    raise ValueError("GOOGLE_API_KEY is not set")
+if not ADMIN_PASSWORD:
+    raise ValueError("ADMIN_PASSWORD is not set")
+
 
 def display_results(calculation_result: CalculationResult, claim_data: ClaimData):
     """
