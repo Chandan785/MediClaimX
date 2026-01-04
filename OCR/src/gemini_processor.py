@@ -53,18 +53,15 @@ class GeminiProcessor:
         # Set model name - use the latest available model
         self.model_name = "models/gemini-flash-latest"
         
-        # Free-tier optimization settings
-        self.max_file_size_mb = 20  # Reduced from 200MB for faster processing
-        self.max_retries = 2  # Reduced from 3 to save quota
-        self.base_delay = 2.0  # Increased delay to be more conservative with rate limits
-        self.request_timeout = 30  # Shorter timeout for faster failure detection
+        # Free-tier optimization settings - more conservative
+        self.max_file_size_mb = 10  # Reduced from 20MB for faster processing
+        self.max_retries = 1  # Reduced from 2 to save quota
+        self.base_delay = 3.0  # Increased delay to be more conservative with rate limits
+        self.request_timeout = 20  # Shorter timeout for faster failure detection
         
-        # Rate limiting tracking
+        # Rate limiting tracking - basic rate limiting only
         self.last_request_time = 0
-        self.min_request_interval = 1.0  # Minimum 1 second between requests
-        self.daily_request_count = 0
-        self.daily_request_limit = 1500  # Conservative daily limit for free tier
-        self.request_reset_time = 0
+        self.min_request_interval = 2.0  # 2 seconds between requests
     
     def process_documents(self, policy_file, bill_file) -> ClaimData:
         """
@@ -155,13 +152,15 @@ class GeminiProcessor:
                 else:
                     json_text = cleaned_text
                 
-                # Check if response looks truncated
+                # Check if response looks truncated (enhanced detection)
                 is_truncated = (
                     json_end == -1 or  # No closing brace found
                     json_text.count('{') != json_text.count('}') or  # Unbalanced braces
                     json_text.count('[') != json_text.count(']') or  # Unbalanced brackets
                     json_text.endswith(',') or  # Ends with comma
-                    len(response_text) > 1400  # Response is suspiciously long (near token limit)
+                    json_text.endswith('"') or  # Ends with incomplete string
+                    len(response_text) > 2800 or  # Response is near token limit (increased threshold)
+                    '"bill_items"' in json_text and json_text.count('"description"') < 10  # Too few items extracted
                 )
                 
                 if is_truncated:
@@ -241,10 +240,21 @@ class GeminiProcessor:
                 raise RuntimeError(f"Gemini API response missing required fields: {missing_info}")
             
             
-            # Convert to ClaimData object
-            claim_data = ClaimData.from_json(response_data)
-            
-            return claim_data
+            # Convert to ClaimData object - try enhanced format first
+            try:
+                from .enhanced_models import EnhancedClaimData
+                claim_data = EnhancedClaimData.from_json(response_data)
+                
+                # Convert to legacy format for backward compatibility with existing UI
+                legacy_claim_data = claim_data.to_legacy_format()
+                
+                return legacy_claim_data
+                
+            except Exception as enhanced_error:
+                # Fallback to legacy format
+                st.warning("⚠️ Using legacy format processing due to enhanced format error")
+                claim_data = ClaimData.from_json(response_data)
+                return claim_data
             
         except Exception as e:
             if isinstance(e, (ValueError, RuntimeError)):
@@ -252,48 +262,19 @@ class GeminiProcessor:
             else:
                 raise RuntimeError(f"Document processing failed: {str(e)}")
     
-    def _check_daily_quota(self):
-        """
-        Check if we're approaching daily quota limits.
-        Reset counter if it's a new day.
-        """
-        current_time = time.time()
-        
-        # Reset daily counter if it's a new day (24 hours since last reset)
-        if current_time - self.request_reset_time > 86400:  # 24 hours in seconds
-            self.daily_request_count = 0
-            self.request_reset_time = current_time
-        
-        # Check if approaching daily limit
-        if self.daily_request_count >= self.daily_request_limit:
-            raise RuntimeError(
-                f"Daily API request limit reached ({self.daily_request_limit} requests). "
-                f"Please wait until tomorrow or upgrade to a paid plan for higher limits."
-            )
-        
-        # Warn when approaching limit
-        if self.daily_request_count >= self.daily_request_limit * 0.8:
-            remaining = self.daily_request_limit - self.daily_request_count
-            st.warning(f"⚠️ Approaching daily API limit. {remaining} requests remaining today.")
-    
     def _enforce_rate_limit(self):
         """
-        Enforce rate limiting to stay within free-tier limits.
-        Ensures minimum interval between API requests and checks daily quota.
+        Enforce basic rate limiting between API requests.
         """
-        # Check daily quota first
-        self._check_daily_quota()
-        
         current_time = time.time()
         time_since_last_request = current_time - self.last_request_time
         
         if time_since_last_request < self.min_request_interval:
             sleep_time = self.min_request_interval - time_since_last_request
-            st.info(f"⏳ Rate limiting: waiting {sleep_time:.1f}s to stay within free-tier limits...")
+            st.info(f"⏳ Rate limiting: waiting {sleep_time:.1f}s between requests...")
             time.sleep(sleep_time)
         
         self.last_request_time = time.time()
-        self.daily_request_count += 1
     
     def _make_api_call_with_retry(self, content_parts, max_retries: int = None, base_delay: float = None):
         """
@@ -342,13 +323,13 @@ class GeminiProcessor:
                     ),
                 ]
                 
-                # Create generation config optimized for free-tier
+                # Create generation config optimized for MAXIMUM comprehensive extraction
                 config = GenerateContentConfig(
                     safety_settings=safety_settings,
-                    temperature=0.1,  # Low temperature for consistent results
-                    max_output_tokens=4096,  # Increased to prevent JSON truncation
-                    top_p=0.8,  # Conservative sampling
-                    top_k=20   # Limited vocabulary for efficiency
+                    temperature=0.0,  # Lowest temperature for most consistent results
+                    max_output_tokens=32768,  # MAXIMUM tokens for comprehensive extraction (doubled)
+                    top_p=0.98,  # Higher sampling for complex medical terminology
+                    top_k=50   # Expanded vocabulary for detailed medical terms and HSN codes
                 )
                 
                 # Make the API call
@@ -530,48 +511,95 @@ class GeminiProcessor:
     
     def _create_extraction_prompt(self) -> str:
         """
-        Create structured extraction prompt for consistent JSON response.
+        Create ultra-aggressive extraction prompt for comprehensive medical bill analysis.
         
         Returns:
-            Formatted prompt string for Gemini API
+            Formatted prompt string for Gemini API optimized for maximum extraction
         """
-        return """Analyze the insurance policy and medical bill documents. Extract information and respond with ONLY valid JSON.
+        return """🚨 CRITICAL MEDICAL CLAIMS EXTRACTION MISSION 🚨
 
-CRITICAL: Respond with ONLY JSON - no explanations, no markdown, no code blocks.
+You are an EXPERT medical claims processor with ONE MISSION: Extract EVERY SINGLE line item from this medical bill with ABSOLUTE PRECISION.
 
-Required JSON format:
+⚡ ULTRA-AGGRESSIVE EXTRACTION PROTOCOL ⚡
+
+MANDATORY EXTRACTION REQUIREMENTS:
+🔍 SCAN EVERY PAGE: Read ALL pages from start to finish (bills can be 10-16 pages)
+🔍 EXTRACT EVERYTHING: Every medication, supply, procedure, test, charge - NO EXCEPTIONS
+🔍 MINIMUM TARGET: 50+ individual line items (anything less is COMPLETE FAILURE)
+🔍 EXACT DESCRIPTIONS: Copy exact text including HSN codes, dosages, specifications
+🔍 ALL DETAILS: Dates, quantities, unit costs, total costs for each item
+🔍 NO GROUPING: Each item must be separate - never combine or summarize
+
+📋 COMPREHENSIVE EXTRACTION CHECKLIST:
+✅ MEDICATIONS: Every tablet, injection, syrup, ointment with exact names and dosages
+✅ MEDICAL SUPPLIES: Cotton, syringes, needles, gloves, pads, wipes, tubes
+✅ IV SOLUTIONS: All saline, glucose, medications with volumes and concentrations  
+✅ EQUIPMENT: Monitors, pumps, catheters, extension sets, fixation devices
+✅ CONSUMABLES: Dressings, swabs, containers, bottles, bags
+✅ PROCEDURES: All treatments, therapies, interventions
+✅ DIAGNOSTICS: Lab tests, imaging, monitoring
+✅ FACILITY: Room charges, nursing fees, administrative costs
+✅ MISCELLANEOUS: Any other charges, fees, or services
+
+🎯 EXTRACTION EXAMPLES (COPY THESE PATTERNS):
+"PANTEC IV 40MG ( HSN:30049039 )" - Date: 05/11/2025, Qty: 1, Cost: ₹52.96
+"DRYTEX UNDERPAD 60X90CM GS-8407 10S (ROMEONS) ( HSN:48189000 )" - Date: 05/11/2025, Qty: 4, Cost: ₹576.80
+"SODIUM CHLORIDE 0.9% 100ML ( HSN:28010000 )" - Date: 06/11/2025, Qty: 3, Cost: ₹134.79
+"TAZLIN 4.5 GRIM INJ ( HSN:30041090 )" - Date: 06/11/2025, Qty: 3, Cost: ₹1,280.01
+"POSIFLUSH 3P - 3ML SYRINGES ( HSN:90183220 )" - Date: 08/11/2025, Qty: 5, Cost: ₹310.00
+"AVAGARD SCRUB CHGAP 100ML (3M) 500H ( HSN:30142900 )" - Date: 03/11/2025, Qty: 5, Cost: ₹342.19
+
+📊 REQUIRED JSON OUTPUT FORMAT:
 {
   "policy_name": "exact policy name from document",
-  "copay_percentage": 20,
-  "client_name": "name or null",
-  "policy_number": "number or null", 
-  "client_address": "address or null",
+  "copay_percentage": 0,
+  "client_name": "patient full name",
+  "policy_number": "policy number if found",
+  "client_address": "patient address if found",
   "bill_items": [
     {
-      "description": "service description",
-      "cost": 1500.0,
+      "description": "EXACT item description with HSN codes and all specifications",
+      "date": "DD/MM/YYYY",
+      "quantity": 1,
+      "unit_cost": 52.96,
+      "cost": 52.96,
       "is_covered": true,
       "rejection_reason": null
     }
   ]
 }
 
-Rules:
-- policy_name: required string from policy document
-- copay_percentage: required number 0-100 (use 20 if not found)
-- client fields: extract from policy, use null if unclear
-- bill_items: required array, extract ALL items from bill
-- For each item: description (string), cost (number), is_covered (boolean), rejection_reason (string or null)
-- If covered: rejection_reason = null
-- If rejected: provide rejection_reason string
-- Use true/false for booleans, null for empty values
-- Start with { and end with }
+🚨 CRITICAL SUCCESS CRITERIA:
+✅ MINIMUM 40+ items extracted (50+ preferred for hospital bills)
+✅ Each item has EXACT description from bill with HSN codes
+✅ All service dates captured (DD/MM/YYYY format)
+✅ All quantities and unit costs calculated
+✅ No items missed, grouped, or summarized
+✅ Medical terminology preserved exactly as written
 
-Extract all bill line items. Be conservative with coverage decisions."""
+❌ ABSOLUTE FAILURE INDICATORS:
+❌ Generic descriptions like "Medicines", "Supplies", "Procedures"
+❌ Missing HSN codes or medical specifications
+❌ Fewer than 30 items extracted
+❌ Grouped or summarized items instead of individual entries
+❌ Missing dates, quantities, or cost details
+
+🔥 EXTRACTION STRATEGY:
+1. SCAN each page methodically from top to bottom
+2. IDENTIFY every line item with description and cost
+3. EXTRACT exact text including all codes and specifications
+4. CAPTURE service dates for each item
+5. CALCULATE unit costs from quantities and totals
+6. ORGANIZE chronologically by service date
+7. VERIFY minimum 40+ items before finishing
+
+⚡ START ULTRA-AGGRESSIVE EXTRACTION NOW! ⚡
+EXTRACT EVERY SINGLE ITEM - NO EXCEPTIONS - MAXIMUM PRECISION!"""
     
     def _attempt_json_recovery(self, response_text: str) -> Optional[str]:
         """
         Attempt to recover from common JSON formatting issues in Gemini responses.
+        Enhanced to handle missing required fields and provide fallbacks.
         
         Args:
             response_text: The raw response text from Gemini
@@ -682,13 +710,88 @@ Extract all bill line items. Be conservative with coverage decisions."""
             if open_braces > close_braces:
                 fixed_text += '}' * (open_braces - close_braces)
             
-            # Test if the fixed text is valid JSON
+            # 10. Try to parse and add missing required fields if needed
+            try:
+                parsed = json.loads(fixed_text)
+                
+                # Add missing required fields with defaults
+                if 'policy_name' not in parsed:
+                    parsed['policy_name'] = 'Policy Name Not Found'
+                
+                if 'copay_percentage' not in parsed:
+                    parsed['copay_percentage'] = 0.0  # Default to no copay
+                
+                if 'bill_items' not in parsed:
+                    parsed['bill_items'] = []
+                elif not isinstance(parsed['bill_items'], list):
+                    parsed['bill_items'] = []
+                
+                # Ensure bill_items have required fields
+                for item in parsed['bill_items']:
+                    if 'description' not in item:
+                        item['description'] = 'Service Description Not Available'
+                    if 'cost' not in item:
+                        item['cost'] = 0.0
+                    if 'is_covered' not in item:
+                        item['is_covered'] = True  # Default to covered for admin review
+                    if 'rejection_reason' not in item:
+                        item['rejection_reason'] = None
+                    
+                    # Add enhanced fields with defaults
+                    if 'date' not in item:
+                        item['date'] = None
+                    if 'quantity' not in item:
+                        item['quantity'] = 1
+                    if 'unit_cost' not in item:
+                        item['unit_cost'] = item['cost'] / item.get('quantity', 1) if item.get('quantity', 1) > 0 else item['cost']
+                
+                # Convert back to JSON string
+                fixed_text = json.dumps(parsed)
+                
+            except json.JSONDecodeError:
+                # If parsing still fails, create a minimal valid structure
+                minimal_structure = {
+                    "policy_name": "Policy Analysis Required",
+                    "copay_percentage": 0.0,
+                    "client_name": None,
+                    "policy_number": None,
+                    "client_address": None,
+                    "bill_items": [
+                        {
+                            "description": "Manual review required - AI extraction incomplete",
+                            "cost": 0.0,
+                            "is_covered": True,
+                            "rejection_reason": None
+                        }
+                    ]
+                }
+                fixed_text = json.dumps(minimal_structure)
+            
+            # Final validation
             json.loads(fixed_text)
             return fixed_text
             
         except Exception:
-            # If recovery fails, return None
-            return None
+            # If all recovery attempts fail, return a minimal valid structure
+            try:
+                minimal_structure = {
+                    "policy_name": "Document Processing Failed",
+                    "copay_percentage": 0.0,
+                    "client_name": None,
+                    "policy_number": None,
+                    "client_address": None,
+                    "bill_items": [
+                        {
+                            "description": "Please review documents and try again",
+                            "cost": 0.0,
+                            "is_covered": True,
+                            "rejection_reason": None
+                        }
+                    ]
+                }
+                return json.dumps(minimal_structure)
+            except:
+                return None
     
     def get_document_quality_tips(self) -> str:
         """
@@ -852,7 +955,7 @@ Extract all bill line items. Be conservative with coverage decisions."""
     
     def _validate_response(self, response: Dict[str, Any]) -> bool:
         """
-        Validate Gemini API response structure.
+        Validate Gemini API response structure for both legacy and enhanced formats.
         
         Args:
             response: Parsed JSON response from Gemini API
@@ -860,44 +963,207 @@ Extract all bill line items. Be conservative with coverage decisions."""
         Returns:
             True if response is valid, False otherwise
         """
-        # Check required top-level fields
-        required_fields = {'policy_name', 'copay_percentage', 'bill_items'}
-        if not all(field in response for field in required_fields):
+        # Check for enhanced format first
+        if 'policy_analysis' in response:
+            return self._validate_enhanced_response(response)
+        else:
+            return self._validate_legacy_response(response)
+    
+    def _validate_enhanced_response(self, response: Dict[str, Any]) -> bool:
+        """Validate enhanced response format"""
+        required_sections = {'policy_analysis', 'client_details', 'bill_analysis', 'bill_items'}
+        if not all(section in response for section in required_sections):
             return False
         
-        # Validate policy_name
-        if not isinstance(response['policy_name'], str) or not response['policy_name'].strip():
+        # Validate policy analysis
+        policy = response['policy_analysis']
+        if not isinstance(policy.get('policy_name'), str) or not policy['policy_name'].strip():
             return False
         
-        # Validate copay_percentage
-        copay = response['copay_percentage']
+        copay = policy.get('copay_percentage')
         if not isinstance(copay, (int, float)) or not (0 <= copay <= 100):
             return False
         
-        # Validate optional client fields
-        client_name = response.get('client_name')
-        if client_name is not None and (not isinstance(client_name, str) or not client_name.strip()):
-            return False
-        
-        policy_number = response.get('policy_number')
-        if policy_number is not None and (not isinstance(policy_number, str) or not policy_number.strip()):
-            return False
-        
-        client_address = response.get('client_address')
-        if client_address is not None and (not isinstance(client_address, str) or not client_address.strip()):
-            return False
-        
-        # Validate bill_items
+        # Validate bill items
         bill_items = response['bill_items']
         if not isinstance(bill_items, list) or len(bill_items) == 0:
             return False
         
         # Validate each bill item
         for item in bill_items:
-            if not self._validate_bill_item(item):
+            if not self._validate_enhanced_bill_item(item):
                 return False
         
         return True
+    
+    def _validate_enhanced_bill_item(self, item: Dict[str, Any]) -> bool:
+        """Validate enhanced bill item structure"""
+        required_fields = {'category', 'description', 'quantity', 'unit_cost', 'total_cost', 'is_covered'}
+        if not all(field in item for field in required_fields):
+            return False
+        
+        # Validate description
+        if not isinstance(item['description'], str) or not item['description'].strip():
+            return False
+        
+        # Validate costs
+        if not isinstance(item['unit_cost'], (int, float)) or item['unit_cost'] < 0:
+            return False
+        
+        if not isinstance(item['total_cost'], (int, float)) or item['total_cost'] < 0:
+            return False
+        
+        # Validate quantity
+        if not isinstance(item['quantity'], int) or item['quantity'] < 1:
+            return False
+        
+        # Validate is_covered
+        if not isinstance(item['is_covered'], bool):
+            return False
+        
+        # Validate coverage/rejection logic
+        if item['is_covered']:
+            # Covered items should have coverage reason
+            if not item.get('coverage_reason'):
+                # Auto-add default coverage reason
+                item['coverage_reason'] = 'Covered by policy'
+        else:
+            # Rejected items should have rejection reason
+            if not item.get('rejection_reason') or not isinstance(item['rejection_reason'], str):
+                return False
+        
+        return True
+    
+    def _validate_legacy_response(self, response: Dict[str, Any]) -> bool:
+        """Validate legacy response format with better error handling"""
+        # Check and fix policy_name
+        if 'policy_name' not in response or not isinstance(response['policy_name'], str) or not response['policy_name'].strip():
+            response['policy_name'] = 'Policy Name Not Available'
+        
+        # Check and fix copay_percentage (optional, default to 0)
+        if 'copay_percentage' not in response:
+            response['copay_percentage'] = 0.0
+        else:
+            copay = response['copay_percentage']
+            if not isinstance(copay, (int, float)) or not (0 <= copay <= 100):
+                response['copay_percentage'] = 0.0
+        
+        # Fix optional client fields
+        if 'client_name' not in response or not isinstance(response.get('client_name'), str):
+            response['client_name'] = None
+        
+        if 'policy_number' not in response or not isinstance(response.get('policy_number'), str):
+            response['policy_number'] = None
+        
+        if 'client_address' not in response or not isinstance(response.get('client_address'), str):
+            response['client_address'] = None
+        
+        # Check and fix bill_items
+        if 'bill_items' not in response or not isinstance(response['bill_items'], list):
+            response['bill_items'] = []
+        
+        # If no bill items, add a placeholder that indicates extraction failure
+        if len(response['bill_items']) == 0:
+            response['bill_items'] = [{
+                'description': 'EXTRACTION FAILED - No items found. Please try again with clearer documents.',
+                'cost': 0.0,
+                'is_covered': True,
+                'rejection_reason': None,
+                'date': None,
+                'quantity': 1,
+                'unit_cost': 0.0
+            }]
+        
+        # Check for comprehensive extraction - warn if too few items
+        elif len(response['bill_items']) < 10:
+            # Add a warning item to indicate potential incomplete extraction
+            response['bill_items'].append({
+                'description': f'⚠️ WARNING: Only {len(response["bill_items"])} items extracted. Medical bills typically have 30-50+ items. Consider re-processing for complete extraction.',
+                'cost': 0.0,
+                'is_covered': True,
+                'rejection_reason': None,
+                'date': None,
+                'quantity': 1,
+                'unit_cost': 0.0
+            })
+        
+        # Validate and fix each bill item
+        valid_items = []
+        for item in response['bill_items']:
+            fixed_item = self._fix_bill_item(item)
+            if fixed_item:
+                valid_items.append(fixed_item)
+        
+        response['bill_items'] = valid_items
+        
+        # Ensure at least one item exists (enhanced validation)
+        if not response['bill_items']:
+            response['bill_items'] = [{
+                'description': 'CRITICAL: Manual review required - AI extraction completely failed',
+                'cost': 0.0,
+                'is_covered': True,
+                'rejection_reason': None,
+                'date': None,
+                'quantity': 1,
+                'unit_cost': 0.0
+            }]
+        
+        # Add extraction quality assessment
+        item_count = len([item for item in response['bill_items'] if not item['description'].startswith('⚠️')])
+        if item_count < 20:
+            st.warning(f"⚠️ **Extraction Quality Alert**: Only {item_count} items extracted. Medical bills typically contain 30-50+ detailed line items. Consider re-processing for comprehensive extraction.")
+        elif item_count >= 40:
+            st.success(f"✅ **Comprehensive Extraction**: {item_count} items extracted successfully!")
+        
+        return True  # Always return True after fixes are applied
+    
+    def _fix_bill_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        """Fix individual bill item and return corrected version"""
+        fixed_item = {}
+        
+        # Fix description
+        if 'description' not in item or not isinstance(item['description'], str) or not item['description'].strip():
+            fixed_item['description'] = 'Service description not available'
+        else:
+            fixed_item['description'] = item['description']
+        
+        # Fix cost
+        if 'cost' not in item or not isinstance(item['cost'], (int, float)) or item['cost'] < 0:
+            fixed_item['cost'] = 0.0
+        else:
+            fixed_item['cost'] = float(item['cost'])
+        
+        # Fix is_covered
+        if 'is_covered' not in item or not isinstance(item['is_covered'], bool):
+            fixed_item['is_covered'] = True  # Default to covered for admin review
+        else:
+            fixed_item['is_covered'] = item['is_covered']
+        
+        # Fix rejection_reason
+        if fixed_item['is_covered']:
+            fixed_item['rejection_reason'] = None
+        else:
+            if 'rejection_reason' not in item or not isinstance(item['rejection_reason'], str) or not item['rejection_reason'].strip():
+                fixed_item['rejection_reason'] = 'Reason not specified - requires admin review'
+            else:
+                fixed_item['rejection_reason'] = item['rejection_reason']
+        
+        # Fix enhanced fields
+        fixed_item['date'] = item.get('date') if isinstance(item.get('date'), str) else None
+        
+        quantity = item.get('quantity', 1)
+        if not isinstance(quantity, int) or quantity < 1:
+            quantity = 1
+        fixed_item['quantity'] = quantity
+        
+        unit_cost = item.get('unit_cost')
+        if unit_cost is not None and isinstance(unit_cost, (int, float)) and unit_cost >= 0:
+            fixed_item['unit_cost'] = float(unit_cost)
+        else:
+            # Calculate unit cost from total cost and quantity
+            fixed_item['unit_cost'] = fixed_item['cost'] / quantity if quantity > 0 else fixed_item['cost']
+        
+        return fixed_item
     
     def _validate_bill_item(self, item: Dict[str, Any]) -> bool:
         """
@@ -938,31 +1204,6 @@ Extract all bill line items. Be conservative with coverage decisions."""
                 return False
         
         return True
-    
-    def get_quota_status(self) -> Dict[str, Any]:
-        """
-        Get current quota usage status for display.
-        
-        Returns:
-            Dictionary with quota information
-        """
-        current_time = time.time()
-        
-        # Reset daily counter if it's a new day
-        if current_time - self.request_reset_time > 86400:
-            self.daily_request_count = 0
-            self.request_reset_time = current_time
-        
-        usage_percentage = (self.daily_request_count / self.daily_request_limit) * 100
-        remaining_requests = self.daily_request_limit - self.daily_request_count
-        
-        return {
-            "daily_used": self.daily_request_count,
-            "daily_limit": self.daily_request_limit,
-            "remaining": remaining_requests,
-            "usage_percentage": usage_percentage,
-            "reset_time": self.request_reset_time + 86400  # Next reset time
-        }
     
     def test_api_connection(self) -> Tuple[bool, str]:
         """

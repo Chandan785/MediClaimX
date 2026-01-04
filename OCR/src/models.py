@@ -16,18 +16,24 @@ import pandas as pd
 @dataclass
 class BillItem:
     """
-    Represents an individual line item from a medical bill.
+    Represents an individual line item from a medical bill with enhanced details.
     
     Attributes:
-        description: Human-readable description of the medical service/item
-        cost: Cost of the item in dollars (must be non-negative)
+        description: Exact description of the medical service/item from bill
+        cost: Total cost of the item in Indian Rupees (must be non-negative)
         is_covered: Whether this item is covered by the insurance policy
         rejection_reason: Reason for rejection if not covered (None if covered)
+        date: Service date if available (optional)
+        quantity: Quantity of service/item (default 1)
+        unit_cost: Unit cost if available (optional)
     """
     description: str
     cost: float
     is_covered: bool
     rejection_reason: Optional[str] = None
+    date: Optional[str] = None
+    quantity: int = 1
+    unit_cost: Optional[float] = None
     
     def __post_init__(self):
         """Validate BillItem data after initialization."""
@@ -58,6 +64,20 @@ class BillItem:
         
         if not self.is_covered and self.rejection_reason is None:
             raise ValueError("Rejected items must have rejection reasons")
+        
+        # Validate optional fields
+        if self.date is not None and not isinstance(self.date, str):
+            raise ValueError("date must be a string or None")
+        
+        if not isinstance(self.quantity, int) or self.quantity < 1:
+            raise ValueError("quantity must be a positive integer")
+        
+        if self.unit_cost is not None and (not isinstance(self.unit_cost, (int, float)) or self.unit_cost < 0):
+            raise ValueError("unit_cost must be a non-negative number or None")
+        
+        # Calculate unit_cost if not provided
+        if self.unit_cost is None and self.quantity > 0:
+            self.unit_cost = self.cost / self.quantity
     
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -90,7 +110,10 @@ class BillItem:
             description=data['description'],
             cost=float(data['cost']),
             is_covered=bool(data['is_covered']),
-            rejection_reason=data.get('rejection_reason')
+            rejection_reason=data.get('rejection_reason'),
+            date=data.get('date'),
+            quantity=int(data.get('quantity', 1)),
+            unit_cost=float(data['unit_cost']) if data.get('unit_cost') is not None else None
         )
 
 
@@ -196,7 +219,7 @@ class ClaimData:
         
         return cls(
             policy_name=json_data['policy_name'],
-            copay_percentage=float(json_data['copay_percentage']),
+            copay_percentage=float(json_data.get('copay_percentage', 0.0)),  # Default to 0 if not specified
             bill_items=bill_items,
             client_name=json_data.get('client_name'),
             policy_number=json_data.get('policy_number'),
@@ -354,9 +377,14 @@ class CalculationResult:
         total_covered = sum(item.cost for item in covered_items)
         total_rejected = sum(item.cost for item in rejected_items)
         
-        # Apply copay
-        patient_responsibility = total_covered * (claim_data.copay_percentage / 100)
-        approved_amount = total_covered - patient_responsibility
+        # Apply copay only if specified in policy
+        if claim_data.copay_percentage > 0:
+            patient_responsibility = total_covered * (claim_data.copay_percentage / 100)
+            approved_amount = total_covered - patient_responsibility
+        else:
+            # No copay - full reimbursement for covered items
+            patient_responsibility = 0.0
+            approved_amount = total_covered
         
         # Create DataFrame for display
         bill_items_data = []

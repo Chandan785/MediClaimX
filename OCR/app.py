@@ -11,6 +11,8 @@ import io
 from typing import Optional, List, Dict, Any
 from src.validation import InputValidator
 from src.gemini_processor import GeminiProcessor
+from src.enhanced_gemini_processor import EnhancedGeminiProcessor
+from src.coverage_engine import enhance_claim_with_coverage_analysis
 from src.calculator import ClaimCalculator
 from src.models import ClaimData, CalculationResult
 from src.pdf_generator import PDFReportGenerator
@@ -248,6 +250,202 @@ def display_results(calculation_result: CalculationResult, claim_data: ClaimData
         st.warning(f"⚠️ **Review Required:** {rejected_items} item(s) were rejected. Check rejection reasons above.")
     
     st.info("📋 **Next:** Admin review and approval required before downloading final reports")
+
+def display_enhanced_analysis(enhanced_result):
+    """
+    Display comprehensive enhanced analysis results.
+    
+    Args:
+        enhanced_result: EnhancedCalculationResult with detailed analysis
+    """
+    st.markdown("---")
+    st.subheader("📊 Comprehensive Analysis")
+    
+    # Category Breakdown
+    if enhanced_result.category_breakdown:
+        st.subheader("🏥 Service Category Breakdown")
+        
+        # Create category summary table
+        category_data = []
+        for category, data in enhanced_result.category_breakdown.items():
+            category_data.append({
+                'Category': category.title().replace('_', ' '),
+                'Items': data['count'],
+                'Total Billed': f"₹{data['billed']:,.2f}",
+                'Covered': f"₹{data['covered']:,.2f}",
+                'Rejected': f"₹{data['rejected']:,.2f}",
+                'Avg Cost': f"₹{data['average_cost']:,.2f}",
+                'Coverage Rate': f"{data['coverage_rate']:.1f}%"
+            })
+        
+        category_df = pd.DataFrame(category_data)
+        
+        # Display with color coding
+        def style_category_table(row):
+            coverage_rate = float(row['Coverage Rate'].replace('%', ''))
+            if coverage_rate >= 80:
+                return ['background-color: #e8f5e8'] * len(row)  # Green for high coverage
+            elif coverage_rate >= 50:
+                return ['background-color: #fff3cd'] * len(row)  # Yellow for medium coverage
+            else:
+                return ['background-color: #f8d7da'] * len(row)  # Red for low coverage
+        
+        styled_category_df = category_df.style.apply(style_category_table, axis=1)
+        
+        st.dataframe(
+            styled_category_df,
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Category insights
+        with st.expander("📈 Category Insights", expanded=False):
+            highest_cost_category = max(enhanced_result.category_breakdown.items(), 
+                                      key=lambda x: x[1]['billed'])
+            lowest_coverage_category = min(enhanced_result.category_breakdown.items(), 
+                                         key=lambda x: x[1]['coverage_rate'])
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric(
+                    "Highest Cost Category",
+                    highest_cost_category[0].title(),
+                    f"₹{highest_cost_category[1]['billed']:,.2f}"
+                )
+            
+            with col2:
+                st.metric(
+                    "Lowest Coverage Category",
+                    lowest_coverage_category[0].title(),
+                    f"{lowest_coverage_category[1]['coverage_rate']:.1f}%"
+                )
+    
+    # Detailed Analysis
+    if enhanced_result.detailed_analysis:
+        st.subheader("🔍 Detailed Analysis")
+        
+        analysis = enhanced_result.detailed_analysis
+        
+        # Cost Statistics
+        if 'cost_statistics' in analysis:
+            st.markdown("**💰 Cost Analysis**")
+            cost_stats = analysis['cost_statistics']
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Average Item Cost", f"₹{cost_stats.get('average_item_cost', 0):,.2f}")
+            
+            with col2:
+                st.metric("Median Item Cost", f"₹{cost_stats.get('median_item_cost', 0):,.2f}")
+            
+            with col3:
+                st.metric("Highest Item Cost", f"₹{cost_stats.get('highest_cost_item', 0):,.2f}")
+            
+            with col4:
+                st.metric("Lowest Item Cost", f"₹{cost_stats.get('lowest_cost_item', 0):,.2f}")
+        
+        # Coverage Analysis
+        if 'coverage_analysis' in analysis:
+            st.markdown("**📋 Coverage Analysis**")
+            coverage_stats = analysis['coverage_analysis']
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Coverage Rate", f"{coverage_stats.get('coverage_rate', 0):.1f}%")
+            
+            with col2:
+                st.metric("Rejection Rate", f"{coverage_stats.get('rejection_rate', 0):.1f}%")
+            
+            with col3:
+                st.metric("Avg Covered Cost", f"₹{coverage_stats.get('average_covered_cost', 0):,.2f}")
+            
+            with col4:
+                st.metric("Avg Rejected Cost", f"₹{coverage_stats.get('average_rejected_cost', 0):,.2f}")
+        
+        # Policy Utilization
+        if 'policy_utilization' in analysis:
+            st.markdown("**📊 Policy Utilization**")
+            policy_stats = analysis['policy_utilization']
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                annual_usage = policy_stats.get('annual_limit_usage', 0)
+                st.metric(
+                    "Annual Limit Usage",
+                    f"{annual_usage:.1f}%",
+                    delta=f"{'High' if annual_usage > 80 else 'Normal'} utilization"
+                )
+            
+            with col2:
+                room_compliance = policy_stats.get('room_charges_within_limit', True)
+                st.metric(
+                    "Room Limit Compliance",
+                    "✅ Compliant" if room_compliance else "❌ Exceeded",
+                    delta="Within limits" if room_compliance else "Review required"
+                )
+        
+        # Risk Factors
+        if 'risk_factors' in analysis and analysis['risk_factors']:
+            st.markdown("**⚠️ Risk Factors Identified**")
+            for risk in analysis['risk_factors']:
+                st.warning(f"🚨 {risk}")
+        
+        # Recommendations
+        if 'recommendations' in analysis and analysis['recommendations']:
+            st.markdown("**💡 Recommendations**")
+            for recommendation in analysis['recommendations']:
+                st.info(f"💡 {recommendation}")
+        
+        # Processing Metadata
+        if 'processing_metadata' in analysis:
+            with st.expander("📋 Processing Details", expanded=False):
+                metadata = analysis['processing_metadata']
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write(f"**Total Categories:** {metadata.get('total_categories', 0)}")
+                    st.write(f"**Service Duration:** {metadata.get('date_range', {}).get('duration_days', 0)} days")
+                
+                with col2:
+                    hospital_info = metadata.get('hospital_info', {})
+                    if hospital_info.get('name'):
+                        st.write(f"**Hospital:** {hospital_info['name']}")
+                    if hospital_info.get('bill_number'):
+                        st.write(f"**Bill Number:** {hospital_info['bill_number']}")
+    
+    # Advanced Insights
+    st.subheader("🎯 Key Insights")
+    
+    insights = []
+    
+    # Coverage insights
+    total_items = enhanced_result.coverage_summary.get('Total Items', 0)
+    covered_items = enhanced_result.coverage_summary.get('Covered Items', 0)
+    coverage_rate = (covered_items / total_items * 100) if total_items > 0 else 0
+    
+    if coverage_rate >= 90:
+        insights.append("✅ Excellent coverage rate - most items are covered by your policy")
+    elif coverage_rate >= 70:
+        insights.append("⚠️ Good coverage rate - some items may need review")
+    else:
+        insights.append("🚨 Low coverage rate - consider reviewing policy terms or claim details")
+    
+    # Cost insights
+    if enhanced_result.total_billed > 100000:  # ₹1 lakh
+        insights.append("💰 High-value claim - ensure all documentation is complete")
+    
+    # Category insights
+    if enhanced_result.category_breakdown:
+        admin_charges = enhanced_result.category_breakdown.get('administrative', {}).get('billed', 0)
+        if admin_charges > enhanced_result.total_billed * 0.1:  # More than 10%
+            insights.append("📋 High administrative charges detected - review for optimization")
+    
+    for insight in insights:
+        st.info(insight)
 
 def admin_review_interface(claim_data: ClaimData, calculation_result: CalculationResult):
     """
@@ -753,38 +951,24 @@ def main():
     # Process button with enhanced validation
     process_button_disabled = not (st.session_state.policy_valid and st.session_state.bill_valid)
     
-    # Show quota status for free-tier monitoring
+    # Processing options
     if st.session_state.policy_valid and st.session_state.bill_valid:
-        try:
-            # Create a temporary processor to check quota (without making API calls)
-            temp_processor = GeminiProcessor(GOOGLE_API_KEY)
-            quota_status = temp_processor.get_quota_status()
-            
-            # Display quota information
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric(
-                    label="Daily API Usage",
-                    value=f"{quota_status['daily_used']}/{quota_status['daily_limit']}",
-                    help="Number of API requests used today"
-                )
-            with col2:
-                st.metric(
-                    label="Remaining Requests",
-                    value=str(quota_status['remaining']),
-                    help="API requests remaining for today"
-                )
-            with col3:
-                usage_color = "🟢" if quota_status['usage_percentage'] < 50 else "🟡" if quota_status['usage_percentage'] < 80 else "🔴"
-                st.metric(
-                    label="Usage Level",
-                    value=f"{usage_color} {quota_status['usage_percentage']:.1f}%",
-                    help="Percentage of daily quota used"
-                )
-                
-        except Exception:
-            # Don't show quota if there's an error (e.g., invalid API key)
-            pass
+        st.subheader("⚙️ Processing Options")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            use_enhanced_processing = st.checkbox(
+                "🧠 **Enhanced Coverage Analysis**",
+                value=True,
+                help="Use intelligent coverage determination to identify which items are covered vs rejected based on policy rules"
+            )
+        
+        with col2:
+            if use_enhanced_processing:
+                st.success("✅ **Smart Coverage**: AI will analyze policy rules and determine coverage for each item")
+            else:
+                st.info("ℹ️ **Basic Processing**: Standard extraction without coverage analysis")
     
     if st.button("🔍 Process Claim", type="primary", use_container_width=True, disabled=process_button_disabled):
         if st.session_state.policy_valid and st.session_state.bill_valid:
@@ -873,10 +1057,33 @@ def main():
                     return
                 
                 # Step 4: Process documents with AI
-                status_text.text("🤖 Extracting data with AI (this may take 30-60 seconds)...")
-                progress_bar.progress(60)
-                
-                claim_data = processor.process_documents(policy_file, bill_file)
+                if use_enhanced_processing:
+                    status_text.text("🧠 Processing with Enhanced Coverage Analysis (this may take 60-90 seconds)...")
+                    progress_bar.progress(60)
+                    
+                    try:
+                        # Use enhanced processor
+                        enhanced_processor = EnhancedGeminiProcessor(GOOGLE_API_KEY)
+                        claim_data = enhanced_processor.process_documents_with_coverage_analysis(policy_file, bill_file)
+                    except Exception as e:
+                        st.warning(f"⚠️ **Enhanced processing failed**: {str(e)}")
+                        st.info("🔄 **Falling back to basic processing**...")
+                        
+                        # Fallback to basic processing
+                        processor = GeminiProcessor(GOOGLE_API_KEY)
+                        claim_data = processor.process_documents(policy_file, bill_file)
+                        
+                        # Apply coverage analysis to basic extraction
+                        status_text.text("⚖️ Applying coverage analysis to extracted data...")
+                        claim_data, coverage_summary = enhance_claim_with_coverage_analysis(claim_data)
+                        
+                        # Display coverage summary
+                        st.info(f"📊 **Coverage Analysis**: {coverage_summary['covered_items']}/{coverage_summary['total_items']} items covered ({coverage_summary['coverage_rate']:.1f}%)")
+                else:
+                    status_text.text("🤖 Extracting data with AI (this may take 30-60 seconds)...")
+                    progress_bar.progress(60)
+                    
+                    claim_data = processor.process_documents(policy_file, bill_file)
                 
                 # Step 5: Validate extracted data
                 status_text.text("✅ Validating extracted data...")
@@ -901,9 +1108,46 @@ def main():
                 progress_bar.progress(85)
                 
                 try:
-                    # Initialize calculator and compute results
-                    calculator = ClaimCalculator()
-                    calculation_result = calculator.calculate_reimbursement(claim_data)
+                    # Try enhanced calculation first
+                    try:
+                        from src.enhanced_models import EnhancedClaimData
+                        from src.enhanced_calculator import EnhancedClaimCalculator
+                        
+                        # Check if we have enhanced data
+                        if hasattr(claim_data, 'policy_analysis'):
+                            # We have enhanced data, use enhanced calculator
+                            enhanced_calculator = EnhancedClaimCalculator()
+                            enhanced_result = enhanced_calculator.calculate_comprehensive_reimbursement(claim_data)
+                            
+                            # Convert to legacy format for UI compatibility
+                            calculation_result = CalculationResult(
+                                total_billed=enhanced_result.total_billed,
+                                total_covered=enhanced_result.total_covered,
+                                total_rejected=enhanced_result.total_rejected,
+                                copay_percentage=enhanced_result.copay_percentage,
+                                approved_amount=enhanced_result.approved_amount,
+                                patient_responsibility=enhanced_result.patient_responsibility,
+                                bill_items_df=pd.DataFrame([{
+                                    'description': item.description,
+                                    'cost': item.cost,
+                                    'is_covered': item.is_covered,
+                                    'rejection_reason': item.rejection_reason
+                                } for item in claim_data.bill_items])
+                            )
+                            
+                            # Store enhanced result for advanced features
+                            st.session_state.enhanced_result = enhanced_result
+                            
+                        else:
+                            # Fallback to legacy calculation
+                            calculator = ClaimCalculator()
+                            calculation_result = calculator.calculate_reimbursement(claim_data)
+                            
+                    except Exception as enhanced_error:
+                        st.warning("⚠️ Using standard calculation due to enhanced processing error")
+                        # Fallback to legacy calculation
+                        calculator = ClaimCalculator()
+                        calculation_result = calculator.calculate_reimbursement(claim_data)
                     
                 except ValueError as calc_error:
                     progress_bar.empty()
@@ -1001,6 +1245,10 @@ def main():
     if st.session_state.get('show_results', False) and st.session_state.get('claim_data') and st.session_state.get('calculation_result'):
         # Display main results
         display_results(st.session_state.calculation_result, st.session_state.claim_data)
+        
+        # Display enhanced analysis if available
+        if st.session_state.get('enhanced_result'):
+            display_enhanced_analysis(st.session_state.enhanced_result)
         
         # Admin review interface
         admin_review_interface(st.session_state.claim_data, st.session_state.calculation_result)
