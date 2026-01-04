@@ -41,14 +41,17 @@ An AI-powered Streamlit application that automates medical reimbursement claim v
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/yourusername/medical-claims-processor.git
-cd medical-claims-processor
+git clone https://github.com/Chandan785/MediClaimX.git
 ```
 
 2. **Create and activate virtual environment:**
 ```bash
+#on linux
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
+# On Windows:
+python3 -m venv venv
+venv\Scripts\activate
 ```
 
 3. **Install dependencies:**
@@ -226,7 +229,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ### Getting Help
 
-1. Check the [Issues](https://github.com/yourusername/medical-claims-processor/issues) page
+1. Check the [Issues](https://github.com/Chandan785/MediClaimX.git) page
 2. Review the documentation files in the repository
 3. Run the demo scripts to understand expected behavior
 
